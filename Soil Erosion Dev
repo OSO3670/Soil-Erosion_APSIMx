@@ -1,0 +1,462 @@
+#Loading the packages that would be used for the analysis
+
+library(apsimx) # To inspect, read, edit and run files for 'APSIM' both for classic and next gen
+library(dplyr) #helps to easily manipulate my data-frame and work with them in a way suitable for the analysis
+library(ggplot2) #helps me to create most of the graphics in the model and the computation
+library(readxl) #helps to make it easy to get data out of excel into R
+library(lubridate) #This makes it easy to parse in date related data into the data_frame
+library(tidyr)
+library(writexl)
+library(Metrics)
+library(ie2misc)
+#reading in data from the APSIM classic and the APSIM next generation model
+
+#The data from the APSIM are majorly are d/m/y format, so these breaks it down into year, month and day
+
+resapp <- data.frame(date = cc$Clock.Today, stringsAsFactors = FALSE)
+
+resapsim <- resapp  %>% 
+  separate(date, sep="-", into = c("Year", "month", "doy"))
+
+dates  <- cc$Clock.Today
+ndates <- as.Date(dates, format="%m/%d/%Y")
+strftime(ndates, format="%Y")
+
+dy <- data.frame(yday(ndates))
+
+resapsim$runoff <- cc$runoff
+resapsim$doy <- dy$yday.ndates.
+tail(resapsim)
+
+?yday
+
+yday(resapsim$doy)
+
+
+?function
+
+
+#Developing the soil_loss_model using the data generated from the APSIM nextgen runoff data,
+#The Model is set up in such a way that a function was created
+
+soil_loss_model <- function(year, doy, runoff,
+                            start, end,
+                            K = 0.28, COV = 0.5, P = 0.8, S = 0.087, CVF = 0.2, ROKF = 1, WSA = 1,
+                            L = 100){
+  
+  if(length(doy) != length(year))
+    stop("The length of runoff and year do not match")
+  
+  #if(length(rain) != 365 && length(rain) != 366)
+    #stop("rain is not of the correct length")
+  
+  
+  length.ans <- rep(0, length(year))
+  ans <- data.frame(year = year,
+                    doy = doy, 
+                    Soilloss = length.ans,
+                    Soilloss2 = length.ans,
+                    Cumulative = length.ans,
+                    Cumulative2 = length.ans,
+                    runoff = length.ans)
+  
+  cum.sloss <- 0
+  cum.sloss2<- 0
+  previous_year <- year[1]
+
+  
+  b <- (1.15*(WSA**0.06))
+  
+
+  
+ 
+  ## Start a loop in which we iterate over year, doy, daily runoff
+  for(i in 1:length(year)){
+    
+    if(doy[i] < start || doy[i] > end){
+      
+      next
+      
+    }else{
+      
+      #If it is the begining of the new year, reset the cumulative erosion
+      if (year[i] != previous_year) {
+        cum.sloss <- 0
+        cum.sloss2<- 0
+      }
+      
+      previous_year <- year[i]
+      
+      
+      ## Calculate Soil loss
+      
+      a <- 0.6*(1 - exp(-35.36*S))
+      LS <- (((65.41*(S**2))+ 4.56*S + 0.065)*(L/22.1)**a)
+      
+      #qp <- (6.69* ((WSA)**0.59)* ((runoff[i])**b) * ((rain[i])**(0.72)))
+      
+      #qp <- (3.97*(z^0.7)*(CS^0.16)*(((runoff[i])/25.4)^(0.9*(z^0.02)))*((((L*0.001)^2)/z)^-0.19))
+      
+      Qp <- (runoff[i]/24)
+      
+      
+      X <- 1.586 * ((((runoff[i]) * Qp )**0.56) * ((WSA)**0.12))
+      
+      Soilloss2 <- (X * K * CVF * P * LS * ROKF)
+      
+    
+      
+      #Soilloss3 <- ((11.8*((((runoff[i])*WSA)/(360*24))*qp)^0.56) * K * CVF * LS * P)
+      #Soilloss3 <- (11.8*((((runoff[i])*0.001*z)*qp)^0.56) * K * CVF * LS * P)
+        
+      if (COV < 0.5){
+        Soilloss <- ((16.52 - 0.46*COV + (0.0031*COV**2))*((LS* K * P * runoff[i])/10))
+        }else{
+          Soilloss <- (((-0.0254*COV) + 2.54)*((LS* K * P * runoff[i])/10))
+          
+        }
+      
+      
+      ans[i, 'Soilloss'] <- Soilloss
+      ans[i, 'Soilloss2'] <- Soilloss2
+      cum.sloss <- cum.sloss + Soilloss
+      cum.sloss2 <- cum.sloss2 + Soilloss2
+      ans[i, "Cumulative"] <- cum.sloss
+      ans[i, "Cumulative2"] <- cum.sloss2
+      ans[i, "runoff"] <- runoff[i]
+    }
+  }
+  
+  return(ans)
+}
+
+
+
+## Run the model
+res <- soil_loss_model(year = cc$year,
+                       doy = cc$doy,
+                       runoff = cc$runoff,
+                       start = 1, end = 366)
+View(res)
+tail(res)
+
+dim(res)
+
+#JUST IN CASE I WANT TO EXPORT OUT THE EXCEL FILE FROM THE RESULT IN THE R COMPUTATION
+
+write_xlsx(apclassic,"C:/Users/Beloved/Downloads/525//525/sloss.xlsx")
+
+
+ggplot(res)+
+  geom_line(aes( x = doy, y = Cumulative, col = 'PERFECT'))+
+  geom_line(aes( x = doy, y = Cumulative2, col = 'MUSLE'))+
+  facet_wrap(~year)
+
+
+
+##This is to get the cumulative sum of yearly data of erosion and runoff in APSIM classic
+#and the soil erosion from the APSIM next generation
+
+View(ccd)
+
+?cumsum
+
+
+ccd2 <- ccd %>%
+          group_by(year) %>%
+          summarise(cum_soilloss = cumsum(soil_loss),
+                    Date = as.Date(Date))
+
+ccd3 <- ccd %>%
+  group_by(year) %>%
+  summarise(cum_runoff = cumsum(runoff),
+            Date = as.Date(Date))
+
+ccd4 <- res %>%
+  group_by(year) %>%
+  summarise(cum_runoff = cumsum(runoff))
+
+write_xlsx(ccd3,"C:/Users/Beloved/Downloads/525/525/roff1.xlsx")
+write_xlsx(ccd4,"C:/Users/Beloved/Downloads/525/525/roff2.xlsx")
+
+res
+apclassic <- cbind(res, ccd2$cum_soilloss)
+apclassic <- cbind(apclassic, ccd3$cum_runoff)
+apclassic <- cbind(apclassic, ccd4$cum_runoff)
+apclassic <- cbind(apclassic, ccd$soil_loss)
+apclassic <- cbind(apclassic, ccd$Biomass)
+apclassic <- cbind(apclassic, ccd$yield)
+apclassic <- cbind(apclassic, cc$Biomass)
+apclassic <- cbind(apclassic, cc$Yield)
+apclassic <- cbind(apclassic, cc$Maize.CoverTotal)
+apclassic <- cbind(apclassic, ccd$cover_tot)
+
+?colnames
+
+ncol(apclassic)
+dim(apclassic)
+colnames(apclassic)[8] = "apclasoilloss"
+colnames(apclassic)[9] <- "apclasrunoff"
+colnames(apclassic)[10] <- "cum_runoff_R"
+colnames(apclassic)[11] <- "classicsoilloss"
+colnames(apclassic)[12] <- "biomass"
+colnames(apclassic)[13] <- "yield"
+colnames(apclassic)[14] <- "biomassX"
+colnames(apclassic)[15] <- "yieldX"
+colnames(apclassic)[16] <- "cover"
+colnames(apclassic)[17] <- "coverX"
+
+View(apclassic)
+
+rmse(apclassic$Soilloss, apclassic$classicsoilloss)
+mae(apclassic$Soilloss, apclassic$classicsoilloss)
+bias(apclassic$Soilloss, apclassic$classicsoilloss)
+mse(apclassic$Soilloss, apclassic$classicsoilloss)
+mad(apclassic$Soilloss, apclassic$classicsoilloss)
+madstat(apclassic$Soilloss, apclassic$classicsoilloss,na.rm = FALSE)
+
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = yield, col ='yield classic'))+
+  geom_line(aes(x =doy, y = yieldX, col ='yield nexgen'))+
+  labs(x = "day_of_the_year", y = "yield")+
+  labs(title = "The comparison between yield generated in classic and nextgen",
+       subtitle = 'Indiana')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))+
+  facet_wrap(~year)
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = biomass, col ='biomass classic'))+
+  geom_line(aes(x =doy, y = biomassX, col ='biomass nexgen'))+
+  labs(x = "day_of_the_year", y = "Biomass")+
+  labs(title = "The comparison between biomass generated in classic and nextgen",
+       subtitle = 'Indiana')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))+
+  facet_wrap(~year)
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = cover, col ='cover classic'))+
+  geom_line(aes(x =doy, y = coverX, col ='cover nexgen'))+
+  labs(x = "day_of_the_year", y = "Cover")+
+  labs(title = "The comparison between Total cover generated in classic and nextgen",
+       subtitle = 'Indiana')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))+
+  facet_wrap(~year)
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = Cumulative, col ='Soilloss_R_PERFECT'))+
+  geom_line(aes(x =doy, y = Cumulative2, col ='Soilloss_R_MUSLE'))+
+  geom_line(aes(x = doy, y = apclasoilloss, col = 'Soilloss_Classic'))+
+  labs(x = "day_of_the_year", y = "Cummulative Soil Loss")+
+  facet_wrap(~year)
+
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = Cumulative, col ='Soilloss_R_PERFECT'))+
+  geom_line(aes(x =doy, y = Cumulative2, col ='Soilloss_R_MUSLE'))+
+  geom_line(aes(x = doy, y = apclasoilloss, col = 'Soilloss_Classic'))+
+  labs(x = "day_of_the_year", y = "Cummulative Soil Loss")+
+  labs(title = "The comparison between erosion models from R and classic",
+       subtitle = 'Indiana')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))+
+  facet_wrap(~year)
+
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = Cumulative, col ='Soilloss_R_PERFECT'))+
+  geom_line(aes(x =doy, y = Cumulative2, col ='Soilloss_R_MUSLE'))+
+  labs(x = "day_of_the_year", y = "Cummulative Soil Loss")+
+  facet_wrap(~year)
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = Cumulative, col ='Soilloss_R_PERFECT'))+
+  geom_line(aes(x = doy, y = apclasoilloss, col = 'Soilloss_Classic'))+
+  labs(x = "day_of_the_year", y = "Cummulative Soil Loss")+
+  labs(title = "The comparison between classic and R-generated soil erosion",
+       subtitle = 'Indiana')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))+
+  facet_wrap(~year)
+  
+
+
+ggplot(apclassic)+
+  geom_line(aes(x =doy, y = cum_runoff_R, col ='Runoff_nexgen'))+
+  geom_line(aes(x = doy, y = apclasrunoff, col = 'Runooff_classic'))+
+  labs(x = "day_of_the_year", y = "Cummulative Runoff")+
+  labs(title = "The comparison between runoff generated in classic and nextgen",
+       subtitle = 'Indiana')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))+
+  facet_wrap(~year)
+
+
+
+ggsave("ggplot2saves.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+ggsave("ggplot2saves2.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+ggsave("ggplot2saves3.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+ggsave("ggplot2saves4.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+
+
+#Sensitivity analysis from APSIM next gen using tillage depth and residue
+
+PGCs <- read_xlsx("CColuwatuyiExperiment.xlsx")
+
+PGCs$Tilldepth <- as.factor(PGCs$Tillagedepth)
+PGCs$restillage <-as.factor(PGCs$ResidueTillage)
+
+
+ggplot(PGCs, aes(x = Tilldepth, y = infiltration, color = Tilldepth)) +
+  geom_boxplot() +
+  theme_classic()+
+  labs(title = "The rate of infiltration for different tillage depth using factorial in APSIMx",
+       subtitle = '(2010 - 2020)')+
+  ylab("Infiltration(mm)")+
+  xlab("Tillage Depth(mm)")+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))
+
+PGCs
+
+ggplot(PGCs, aes(x =restillage , y = infiltration, color = restillage)) +
+  geom_boxplot() +
+  theme_classic()+
+  labs(title = "The rate of infiltration for different tillage depth using factorial in APSIMx",
+       subtitle = '(2010 - 2020)')+
+  ylab("Runoff(mm)")+
+  xlab("Fraction of Residue to Incorporate")+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))
+
+
+
+
+#--------------------------
+
+
+ggplot(PGCz, aes(x = SlopPGC, y = soil_loss, color = SlopPGC)) +
+  geom_boxplot() +
+  theme_classic()+
+  labs(title = "The soil loss sensitivity analysis with PGC using varying Slope",
+       subtitle = '(1982 - 2020)')+
+  ylab("Soil Loss(Mg/ha)")+
+  
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))
+
+ggplot(PGCz, aes(x =SlopPGC, y = runoff, color = SlopPGC)) +
+  geom_boxplot() +
+  theme_classic()+
+  labs(title = "The runoff sensitivity analysis with PGC using varying Slope",
+       subtitle = '(1982 - 2020)')+
+  ylab("Runoff(mm)")+
+  
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))
+
+
+#Carrying out sensitivity analysis based on different parameters in the erosion model. 
+#I used the result of resapsim here because the data has been processed at all, so after giving it
+#the range of value then we can easily generate the erosion runoff
+
+## Testing different K values
+range_k <- runif(100, min = 0.1, max = 1)
+range_k <- seq(0, 1, 0.1)
+
+err <- data.frame()
+for (i in 1:length(range_k)){
+  
+  err.k <- soil_loss_model(year = resapsim$Year,
+                           doy = resapsim$doy,
+                           runoff = resapsim$runoff,
+                           start = 1, end = 366,
+                           K = range_k[i])
+  err.k$K <- range_k[i]
+  err <- rbind(err, err.k)
+  
+  err
+}
+
+
+err$cumulative_multiple_year <- ave(err$Soilloss, err$K, FUN = cumsum)
+
+View(resapsim)
+library(ggplot2)
+
+ggplot(err)+
+  geom_line(aes( x = year, y = cumulative_multiple_year, col = K, group = K, xlab=("Cumulative_soil_erosion"), ylab= ("Year")))+
+  scale_colour_gradientn(colors=rainbow(8))+
+  labs(title = "The cumulative erosion based on varying erodibility factor - K", subtitle = 'SensitivityAnalysis')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))
+
+
+?labs
+## Testing different P values
+range_p <- runif(10, min = 0.1, max = 1)
+
+err2 <- data.frame()
+for (i in 1:length(range_p)){
+  
+  err2.p <- soil_loss_model(year = resapsim$Year,
+                           doy = resapsim$doy,
+                           runoff = resapsim$runoff,
+                           start = 1, end = 366,
+                           P = range_p[i])
+  err2.p$P <- range_p[i]
+  err2 <- rbind(err2, err2.p)
+  
+  err2
+}
+
+err2$cumulative_multiple_year <- ave(err2$Soilloss, err2$P, FUN = cumsum)
+
+resapsim
+
+ggplot(err2)+
+  geom_line(aes( x = year, y = cumulative_multiple_year, col = P, group = P, xlab ="Cumulative_soil_erosion", ylab="Year"))+
+  scale_colour_gradientn(colors=rainbow(8))+
+  labs(title = "The cumulative erosion based on varying conservation practice factor-P", subtitle = 'SensitivityAnalysis')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.subtitle = element_text(hjust=0.5))
+
+## Testing different COV values
+
+range_c <- runif(10, min = 0.1, max = 1)
+
+err3 <- data.frame()
+for (i in 1:length(range_c)){
+  
+  err3.c <- soil_loss_model(year = resapsim$Year,
+                            doy = resapsim$doy,
+                            runoff = resapsim$runoff,
+                            start = 1, end = 366,
+                            COV = range_c[i])
+  err3.c$C <- range_c[i]
+  err3 <- rbind(err3, err3.c)
+  
+  err3
+}
+
+err3$cumulative_multiple_year <- ave(err3$Soilloss, err3$C, FUN = cumsum)
+resapsim
+
+ggplot(err3)+
+  geom_line(aes( x = year, y = cumulative_multiple_year, col = C, group = C, xlab="Cumulative_soil_erosion", ylab="Year"))+
+  scale_colour_gradientn(colors=rainbow(8))+
+  labs(title = "The cumulative erosion based on varying Cover factor", subtitle = 'SensitivityAnalysis')+
+  theme(plot.subtitle = element_text(hjust=0.5))+
+  theme(plot.title = element_text(hjust=0.5))
+
+  scale_color_distiller(palette = 'Spectral')
+
+
+  ggsave("ggplot2saves.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+  ggsave("ggplot2saves2.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+  ggsave("ggplot2saves3.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+  ggsave("ggplot2saves4.jpg", width = 20, height = 10, units = c("cm"), dpi =800)
+  
